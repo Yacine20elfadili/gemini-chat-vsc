@@ -101,10 +101,9 @@ class GeminiChatProvider {
             message: userMessage
         });
 
-        // Show thinking indicator
+        // Show typing indicator
         this._view.webview.postMessage({
-            type: 'thinking',
-            message: 'Thinking...'
+            type: 'startTyping'
         });
 
         try {
@@ -119,11 +118,8 @@ class GeminiChatProvider {
             };
             this._messages.push(aiMessage);
 
-            // Update UI with AI response
-            this._view.webview.postMessage({
-                type: 'response',
-                message: response
-            });
+            // Start streaming the response
+            this._streamResponse(response);
 
         } catch (error) {
             console.error('Error calling Gemini API:', error);
@@ -132,6 +128,35 @@ class GeminiChatProvider {
                 message: `Error: ${error.message}`
             });
         }
+    }
+
+    _streamResponse(fullResponse) {
+        const words = fullResponse.split(' ');
+        let currentIndex = 0;
+        
+        // Initialize the streaming response
+        this._view.webview.postMessage({
+            type: 'startStreaming'
+        });
+
+        const streamInterval = setInterval(() => {
+            if (currentIndex < words.length) {
+                const wordsToAdd = Math.min(2, words.length - currentIndex); // Add 1-2 words at a time
+                const chunk = words.slice(currentIndex, currentIndex + wordsToAdd).join(' ');
+                
+                this._view.webview.postMessage({
+                    type: 'streamChunk',
+                    chunk: chunk + (currentIndex + wordsToAdd < words.length ? ' ' : '')
+                });
+                
+                currentIndex += wordsToAdd;
+            } else {
+                clearInterval(streamInterval);
+                this._view.webview.postMessage({
+                    type: 'endStreaming'
+                });
+            }
+        }, 50); // Adjust speed here (50ms = 20 words per second)
     }
 
     async _callGeminiAPI(userMessage, apiKey) {
@@ -370,10 +395,65 @@ class GeminiChatProvider {
             white-space: pre-wrap;
         }
         
-        .thinking {
+        .typing-indicator {
             color: var(--vscode-descriptionForeground);
             font-style: italic;
             align-self: flex-start;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .typing-dots {
+            display: flex;
+            gap: 4px;
+        }
+        
+        .typing-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: var(--vscode-descriptionForeground);
+            animation: typing 1.4s infinite;
+        }
+        
+        .typing-dot:nth-child(1) {
+            animation-delay: 0s;
+        }
+        
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        
+        @keyframes typing {
+            0%, 60%, 100% {
+                transform: translateY(0);
+                opacity: 0.4;
+            }
+            30% {
+                transform: translateY(-10px);
+                opacity: 1;
+            }
+        }
+        
+        .streaming-message {
+            background-color: var(--vscode-input-background);
+            border: 1px solid var(--vscode-input-border);
+            align-self: flex-start;
+            min-height: 20px;
+        }
+        
+        .cursor-blink {
+            animation: blink 1s infinite;
+        }
+        
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
         }
         
         .input-container {
@@ -503,6 +583,8 @@ class GeminiChatProvider {
     <script>
         const vscode = acquireVsCodeApi();
         let isWaitingForResponse = false;
+        let currentStreamingMessage = null;
+        let streamingContent = '';
         
         // Configure marked for better rendering
         if (typeof marked !== 'undefined') {
@@ -525,18 +607,25 @@ class GeminiChatProvider {
                 case 'userMessage':
                     addMessage(message.message.content, 'user-message', false);
                     break;
-                case 'response':
-                    addMessage(message.message, 'ai-message', true);
+                case 'startTyping':
+                    showTypingIndicator();
+                    break;
+                case 'startStreaming':
+                    startStreamingMessage();
+                    break;
+                case 'streamChunk':
+                    appendToStreamingMessage(message.chunk);
+                    break;
+                case 'endStreaming':
+                    finishStreamingMessage();
                     isWaitingForResponse = false;
                     updateSendButton();
                     break;
                 case 'error':
+                    removeTypingIndicator();
                     addMessage(message.message, 'error-message', false);
                     isWaitingForResponse = false;
                     updateSendButton();
-                    break;
-                case 'thinking':
-                    addMessage(message.message, 'thinking', false);
                     break;
                 case 'apiKey':
                     handleApiKeyStatus(message.hasKey);
@@ -552,6 +641,88 @@ class GeminiChatProvider {
                     break;
             }
         });
+        
+        function showTypingIndicator() {
+            const chatContainer = document.getElementById('chatContainer');
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'message typing-indicator';
+            typingDiv.id = 'typingIndicator';
+            typingDiv.innerHTML = \`
+                <span>Gemini is typing</span>
+                <div class="typing-dots">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            \`;
+            
+            chatContainer.appendChild(typingDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        function removeTypingIndicator() {
+            const typingIndicator = document.getElementById('typingIndicator');
+            if (typingIndicator) {
+                typingIndicator.remove();
+            }
+        }
+        
+        function startStreamingMessage() {
+            removeTypingIndicator();
+            
+            const chatContainer = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message streaming-message';
+            messageDiv.id = 'streamingMessage';
+            
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            
+            currentStreamingMessage = messageDiv;
+            streamingContent = '';
+        }
+        
+        function appendToStreamingMessage(chunk) {
+            if (currentStreamingMessage) {
+                streamingContent += chunk;
+                // Add cursor while streaming
+                currentStreamingMessage.innerHTML = streamingContent + '<span class="cursor-blink">|</span>';
+                
+                // Scroll to bottom
+                const chatContainer = document.getElementById('chatContainer');
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        }
+        
+        function finishStreamingMessage() {
+            if (currentStreamingMessage) {
+                // Remove cursor and apply final styling
+                currentStreamingMessage.className = 'message ai-message';
+                currentStreamingMessage.id = '';
+                
+                // Apply markdown rendering
+                if (typeof marked !== 'undefined') {
+                    currentStreamingMessage.innerHTML = marked.parse(streamingContent);
+                    addCopyButtonsToCodeBlocks(currentStreamingMessage);
+                } else {
+                    currentStreamingMessage.innerHTML = streamingContent;
+                }
+                
+                // Add timestamp
+                const timestampDiv = document.createElement('div');
+                timestampDiv.className = 'timestamp';
+                timestampDiv.textContent = new Date().toLocaleTimeString();
+                currentStreamingMessage.appendChild(timestampDiv);
+                
+                // Final scroll
+                const chatContainer = document.getElementById('chatContainer');
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                
+                // Reset streaming state
+                currentStreamingMessage = null;
+                streamingContent = '';
+            }
+        }
         
         function handleApiKeyStatus(hasKey) {
             const settingsNotice = document.getElementById('settingsNotice');
