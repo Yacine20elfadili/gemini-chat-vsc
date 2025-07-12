@@ -685,8 +685,23 @@ class GeminiChatProvider {
         function appendToStreamingMessage(chunk) {
             if (currentStreamingMessage) {
                 streamingContent += chunk;
-                // Add cursor while streaming
-                currentStreamingMessage.innerHTML = streamingContent + '<span class="cursor-blink">|</span>';
+                
+                // Apply markdown rendering in real-time
+                if (typeof marked !== 'undefined') {
+                    try {
+                        const renderedContent = marked.parse(streamingContent);
+                        currentStreamingMessage.innerHTML = renderedContent + '<span class="cursor-blink">|</span>';
+                        
+                        // Add copy buttons to any newly rendered code blocks
+                        addCopyButtonsToCodeBlocks(currentStreamingMessage);
+                    } catch (error) {
+                        // If markdown parsing fails (incomplete markdown), show raw content
+                        currentStreamingMessage.innerHTML = streamingContent.replace(/\\n/g, '<br>') + '<span class="cursor-blink">|</span>';
+                    }
+                } else {
+                    // Fallback if marked is not available
+                    currentStreamingMessage.innerHTML = streamingContent.replace(/\\n/g, '<br>') + '<span class="cursor-blink">|</span>';
+                }
                 
                 // Scroll to bottom
                 const chatContainer = document.getElementById('chatContainer');
@@ -700,12 +715,17 @@ class GeminiChatProvider {
                 currentStreamingMessage.className = 'message ai-message';
                 currentStreamingMessage.id = '';
                 
-                // Apply markdown rendering
+                // Apply final markdown rendering
                 if (typeof marked !== 'undefined') {
-                    currentStreamingMessage.innerHTML = marked.parse(streamingContent);
-                    addCopyButtonsToCodeBlocks(currentStreamingMessage);
+                    try {
+                        const renderedContent = marked.parse(streamingContent);
+                        currentStreamingMessage.innerHTML = renderedContent;
+                        addCopyButtonsToCodeBlocks(currentStreamingMessage);
+                    } catch (error) {
+                        currentStreamingMessage.innerHTML = streamingContent.replace(/\\n/g, '<br>');
+                    }
                 } else {
-                    currentStreamingMessage.innerHTML = streamingContent;
+                    currentStreamingMessage.innerHTML = streamingContent.replace(/\\n/g, '<br>');
                 }
                 
                 // Add timestamp
@@ -797,6 +817,12 @@ class GeminiChatProvider {
             const codeBlocks = messageDiv.querySelectorAll('pre code');
             codeBlocks.forEach(codeBlock => {
                 const pre = codeBlock.parentNode;
+                
+                // Skip if already has a copy button
+                if (pre.parentNode.classList.contains('code-block-container')) {
+                    return;
+                }
+                
                 const container = document.createElement('div');
                 container.className = 'code-block-container';
                 
