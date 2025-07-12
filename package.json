@@ -1,0 +1,69 @@
+{
+  "name": "gemini-chat-vsc",
+  "displayName": "Gemini Chat VSC",
+  "description": "AI Chat with Gemini API",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gemini-chat-container",
+          "title": "Gemini Chat",
+          "icon": "$(robot)"
+        }
+      ]
+    },
+    "views": {
+      "gemini-chat-container": [
+        {
+          "id": "geminiChatView",
+          "name": "Chat",
+          "type": "webview",
+          "when": "true",
+          "icon": "$(robot)"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "geminiChat.openSettings",
+        "title": "Open Settings",
+        "category": "Gemini Chat"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Gemini Chat",
+      "properties": {
+        "geminiChat.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Your Google Gemini API key",
+          "order": 1
+        }
+      }
+    }
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "node ./test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.101.0",
+    "@types/node": "20.x",
+    "@typescript-eslint/eslint-plugin": "^6.4.1",
+    "@typescript-eslint/parser": "^6.4.1",
+    "eslint": "^8.47.0",
+    "glob": "^10.3.3",
+    "@vscode/test-electron": "^2.3.4"
+  }
+}
