@@ -2,7 +2,7 @@
   "name": "gemini-chat-vsc",
   "displayName": "Gemini Chat VSC",
   "description": "AI Chat with Gemini API",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "engines": {
     "vscode": "^1.101.0"
   },

@@ -78,11 +78,7 @@ Update the README.md content with this complete documentation.
 ### Step 4: Test the Extension
 
 1. Open the folder in VS Code
-2. Open integrated terminal and run:
-   ```bash
-   npm run compile
-   ```
-3. Press `F5` - A new VS Code window will appear with your extension
+2. Press `F5` - A new VS Code window will appear with your extension
 
 **Note**: The extension will not work until you configure a Gemini API key.
 
@@ -254,10 +250,6 @@ Feel free to contribute to this project by:
 - Submitting pull requests
 - Improving documentation
 
-## License
-
-This project is licensed under the MIT License.
-
 ## Privacy
 
 This extension:
@@ -272,4 +264,16 @@ For issues and feature requests, please create an issue in the project repositor
 
 ---
 
-**Happy Coding with Gemini! 🚀**
+## 📜 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 👨‍💻 Author
+
+**Mohamed Yacine Elfadili**
+
+- GitHub: [@Yacine20elfadili](https://github.com/Yacine20elfadili)
+
+---
+
+**Note**: This extension is for educational and legitimate research purposes. Please respect all terms of service and use responsibly.

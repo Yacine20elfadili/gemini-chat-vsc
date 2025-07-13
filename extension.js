@@ -30,197 +30,206 @@ function activate(context) {
 }
 
 class GeminiChatProvider {
-    constructor(extensionUri) {
-        this._extensionUri = extensionUri;
-        this._messages = [];
-        this._currentModel = 'gemini-2.5-pro'; // Updated to use 2.5 Pro as default
-        this._view = null;
+  constructor(extensionUri) {
+    this._extensionUri = extensionUri;
+    this._messages = [];
+    this._currentModel = "gemini-2.5-pro"; // Updated to use 2.5 Pro as default
+    this._view = null;
+  }
+
+  resolveWebviewView(webviewView, context, _token) {
+    this._view = webviewView;
+
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this._extensionUri],
+    };
+
+    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+
+    // Handle messages from webview
+    webviewView.webview.onDidReceiveMessage(
+      async (message) => {
+        await this._handleWebviewMessage(message);
+      },
+      undefined,
+      []
+    );
+  }
+
+  async _handleWebviewMessage(message) {
+    switch (message.type) {
+      case "sendMessage":
+        await this._sendMessage(message.message);
+        break;
+      case "clearChat":
+        this._clearChat();
+        break;
+      case "changeModel":
+        this._currentModel = message.model;
+        break;
+      case "getApiKey":
+        this._checkApiKey();
+        break;
+    }
+  }
+
+  async _sendMessage(content) {
+    if (!content.trim()) return;
+
+    const apiKey = vscode.workspace
+      .getConfiguration("geminiChat")
+      .get("apiKey");
+    if (!apiKey) {
+      this._view.webview.postMessage({
+        type: "error",
+        message: "Please configure your Gemini API key in settings",
+      });
+      return;
     }
 
-    resolveWebviewView(webviewView, context, _token) {
-        this._view = webviewView;
-        
-        webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [this._extensionUri]
-        };
+    // Add user message to session
+    const userMessage = {
+      role: "user",
+      content: content,
+      timestamp: new Date().toISOString(),
+      model: this._currentModel,
+    };
+    this._messages.push(userMessage);
 
-        webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
-        
-        // Handle messages from webview
-        webviewView.webview.onDidReceiveMessage(
-            async (message) => {
-                await this._handleWebviewMessage(message);
-            },
-            undefined,
-            []
-        );
+    // Update UI with user message
+    this._view.webview.postMessage({
+      type: "userMessage",
+      message: userMessage,
+    });
+
+    // Show typing indicator
+    this._view.webview.postMessage({
+      type: "startTyping",
+    });
+
+    try {
+      const response = await this._callGeminiAPI(content, apiKey);
+
+      // Add AI response to session
+      const aiMessage = {
+        role: "assistant",
+        content: response,
+        timestamp: new Date().toISOString(),
+        model: this._currentModel,
+      };
+      this._messages.push(aiMessage);
+
+      // Start streaming the response
+      this._streamResponse(response);
+    } catch (error) {
+      console.error("Error calling Gemini API:", error);
+      this._view.webview.postMessage({
+        type: "error",
+        message: `Error: ${error.message}`,
+      });
     }
+  }
 
-    async _handleWebviewMessage(message) {
-        switch (message.type) {
-            case 'sendMessage':
-                await this._sendMessage(message.message);
-                break;
-            case 'clearChat':
-                this._clearChat();
-                break;
-            case 'changeModel':
-                this._currentModel = message.model;
-                break;
-            case 'getApiKey':
-                this._checkApiKey();
-                break;
-        }
-    }
+  _streamResponse(fullResponse) {
+    // Remove typing indicator and start streaming
+    this._view.webview.postMessage({
+      type: "startStreaming",
+    });
 
-    async _sendMessage(content) {
-        if (!content.trim()) return;
+    // Split the response into ~300-character chunks for smoother markdown rendering
+    const chunks = fullResponse.match(/(.{1,300})(\s+|$)/g) || [];
+    let currentIndex = 0;
 
-        const apiKey = vscode.workspace.getConfiguration('geminiChat').get('apiKey');
-        if (!apiKey) {
-            this._view.webview.postMessage({
-                type: 'error',
-                message: 'Please configure your Gemini API key in settings'
-            });
-            return;
-        }
+    const streamInterval = setInterval(() => {
+      if (currentIndex < chunks.length) {
+        const chunk = chunks[currentIndex];
 
-        // Add user message to session
-        const userMessage = {
-            role: 'user',
-            content: content,
-            timestamp: new Date().toISOString(),
-            model: this._currentModel
-        };
-        this._messages.push(userMessage);
-
-        // Update UI with user message
         this._view.webview.postMessage({
-            type: 'userMessage',
-            message: userMessage
+          type: "streamChunk",
+          chunk: chunk,
         });
 
-        // Show typing indicator
+        currentIndex++;
+      } else {
+        clearInterval(streamInterval);
         this._view.webview.postMessage({
-            type: 'startTyping'
+          type: "endStreaming",
         });
+      }
+    }, 60); // Slightly slower for better rendering performance
+  }
 
-        try {
-            const response = await this._callGeminiAPI(content, apiKey);
-            
-            // Add AI response to session
-            const aiMessage = {
-                role: 'assistant',
-                content: response,
-                timestamp: new Date().toISOString(),
-                model: this._currentModel
-            };
-            this._messages.push(aiMessage);
+  async _callGeminiAPI(userMessage, apiKey) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this._currentModel}:generateContent?key=${apiKey}`;
 
-            // Start streaming the response
-            this._streamResponse(response);
+    // Build conversation context
+    const contents = this._messages.map((msg) => ({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: msg.content }],
+    }));
 
-        } catch (error) {
-            console.error('Error calling Gemini API:', error);
-            this._view.webview.postMessage({
-                type: 'error',
-                message: `Error: ${error.message}`
-            });
-        }
+    // Add current user message
+    contents.push({
+      role: "user",
+      parts: [{ text: userMessage }],
+    });
+
+    const requestBody = {
+      contents: contents,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 8192, // Increased from 2048 to handle longer responses
+        topK: 40,
+        topP: 0.95,
+      },
+    };
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || `HTTP ${response.status}`);
     }
 
-    _streamResponse(fullResponse) {
-        const words = fullResponse.split(' ');
-        let currentIndex = 0;
-        
-        // Initialize the streaming response
-        this._view.webview.postMessage({
-            type: 'startStreaming'
-        });
+    const data = await response.json();
 
-        const streamInterval = setInterval(() => {
-            if (currentIndex < words.length) {
-                const wordsToAdd = Math.min(2, words.length - currentIndex); // Add 1-2 words at a time
-                const chunk = words.slice(currentIndex, currentIndex + wordsToAdd).join(' ');
-                
-                this._view.webview.postMessage({
-                    type: 'streamChunk',
-                    chunk: chunk + (currentIndex + wordsToAdd < words.length ? ' ' : '')
-                });
-                
-                currentIndex += wordsToAdd;
-            } else {
-                clearInterval(streamInterval);
-                this._view.webview.postMessage({
-                    type: 'endStreaming'
-                });
-            }
-        }, 50); // Adjust speed here (50ms = 20 words per second)
+    if (
+      !data.candidates ||
+      !data.candidates[0] ||
+      !data.candidates[0].content
+    ) {
+      throw new Error("Invalid response from Gemini API");
     }
 
-    async _callGeminiAPI(userMessage, apiKey) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${this._currentModel}:generateContent?key=${apiKey}`;
-        
-        // Build conversation context
-        const contents = this._messages.map(msg => ({
-            role: msg.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: msg.content }]
-        }));
-        
-        // Add current user message
-        contents.push({
-            role: 'user',
-            parts: [{ text: userMessage }]
-        });
+    return data.candidates[0].content.parts[0].text;
+  }
 
-        const requestBody = {
-            contents: contents,
-            generationConfig: {
-                temperature: 0.7,
-                maxOutputTokens: 2048,
-            }
-        };
+  _clearChat() {
+    this._messages = [];
+    this._view.webview.postMessage({
+      type: "clearChat",
+    });
+  }
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestBody)
-        });
+  _checkApiKey() {
+    const apiKey = vscode.workspace
+      .getConfiguration("geminiChat")
+      .get("apiKey");
+    this._view.webview.postMessage({
+      type: "apiKey",
+      hasKey: !!apiKey,
+    });
+  }
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error?.message || `HTTP ${response.status}`);
-        }
-
-        const data = await response.json();
-        
-        if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-            throw new Error('Invalid response from Gemini API');
-        }
-
-        return data.candidates[0].content.parts[0].text;
-    }
-
-    _clearChat() {
-        this._messages = [];
-        this._view.webview.postMessage({
-            type: 'clearChat'
-        });
-    }
-
-    _checkApiKey() {
-        const apiKey = vscode.workspace.getConfiguration('geminiChat').get('apiKey');
-        this._view.webview.postMessage({
-            type: 'apiKey',
-            hasKey: !!apiKey
-        });
-    }
-
-    _getHtmlForWebview(webview) {
-        return `<!DOCTYPE html>
+  _getHtmlForWebview(webview) {
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -585,12 +594,14 @@ class GeminiChatProvider {
         let isWaitingForResponse = false;
         let currentStreamingMessage = null;
         let streamingContent = '';
+        let renderingTimeout = null;
         
         // Configure marked for better rendering
         if (typeof marked !== 'undefined') {
             marked.setOptions({
                 breaks: true,
-                gfm: true
+                gfm: true,
+                renderer: new marked.Renderer()
             });
         }
         
@@ -648,7 +659,6 @@ class GeminiChatProvider {
             typingDiv.className = 'message typing-indicator';
             typingDiv.id = 'typingIndicator';
             typingDiv.innerHTML = \`
-                <span>Gemini is typing</span>
                 <div class="typing-dots">
                     <div class="typing-dot"></div>
                     <div class="typing-dot"></div>
@@ -686,42 +696,66 @@ class GeminiChatProvider {
             if (currentStreamingMessage) {
                 streamingContent += chunk;
                 
-                // Apply markdown rendering in real-time
-                if (typeof marked !== 'undefined') {
-                    try {
-                        const renderedContent = marked.parse(streamingContent);
-                        currentStreamingMessage.innerHTML = renderedContent + '<span class="cursor-blink">|</span>';
-                        
-                        // Add copy buttons to any newly rendered code blocks
-                        addCopyButtonsToCodeBlocks(currentStreamingMessage);
-                    } catch (error) {
-                        // If markdown parsing fails (incomplete markdown), show raw content
-                        currentStreamingMessage.innerHTML = streamingContent.replace(/\\n/g, '<br>') + '<span class="cursor-blink">|</span>';
-                    }
-                } else {
-                    // Fallback if marked is not available
-                    currentStreamingMessage.innerHTML = streamingContent.replace(/\\n/g, '<br>') + '<span class="cursor-blink">|</span>';
+                // Clear existing timeout
+                if (renderingTimeout) {
+                    clearTimeout(renderingTimeout);
                 }
                 
-                // Scroll to bottom
+                // Schedule markdown rendering with a small delay to batch updates
+                renderMarkdownContent(); // render immediately with every chunk
+                
+                // Auto-scroll to bottom
                 const chatContainer = document.getElementById('chatContainer');
                 chatContainer.scrollTop = chatContainer.scrollHeight;
             }
         }
         
+        function renderMarkdownContent() {
+            if (!currentStreamingMessage) return;
+            
+            try {
+                if (typeof marked !== 'undefined') {
+                    // Parse markdown and render
+                    const renderedContent = marked.parse(streamingContent);
+                    currentStreamingMessage.innerHTML = renderedContent + '<span class="cursor-blink">|</span>';
+                    
+                    // Add copy buttons to any new code blocks
+                    addCopyButtonsToCodeBlocks(currentStreamingMessage);
+                } else {
+                    // Fallback: simple line break conversion
+                    currentStreamingMessage.innerHTML = streamingContent.replace(/\\n/g, '<br>') + '<span class="cursor-blink">|</span>';
+                }
+            } catch (error) {
+                console.warn('Markdown parsing failed during streaming:', error);
+                // Fallback to simple text with line breaks
+                currentStreamingMessage.innerHTML = streamingContent.replace(/\\n/g, '<br>') + '<span class="cursor-blink">|</span>';
+            }
+            
+            // Auto-scroll to bottom after rendering
+            const chatContainer = document.getElementById('chatContainer');
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
         function finishStreamingMessage() {
             if (currentStreamingMessage) {
+                // Clear any pending rendering timeout
+                if (renderingTimeout) {
+                    clearTimeout(renderingTimeout);
+                    renderingTimeout = null;
+                }
+                
                 // Remove cursor and apply final styling
                 currentStreamingMessage.className = 'message ai-message';
                 currentStreamingMessage.id = '';
                 
-                // Apply final markdown rendering
+                // Apply final markdown rendering without cursor
                 if (typeof marked !== 'undefined') {
                     try {
                         const renderedContent = marked.parse(streamingContent);
                         currentStreamingMessage.innerHTML = renderedContent;
                         addCopyButtonsToCodeBlocks(currentStreamingMessage);
                     } catch (error) {
+                        console.warn('Markdown parsing failed:', error);
                         currentStreamingMessage.innerHTML = streamingContent.replace(/\\n/g, '<br>');
                     }
                 } else {
@@ -789,11 +823,16 @@ class GeminiChatProvider {
             messageDiv.className = \`message \${className}\`;
             
             if (isMarkdown && typeof marked !== 'undefined') {
-                messageDiv.innerHTML = marked.parse(text);
-                
-                // Add copy buttons to code blocks
-                if (className === 'ai-message') {
-                    addCopyButtonsToCodeBlocks(messageDiv);
+                try {
+                    messageDiv.innerHTML = marked.parse(text);
+                    
+                    // Add copy buttons to code blocks
+                    if (className === 'ai-message') {
+                        addCopyButtonsToCodeBlocks(messageDiv);
+                    }
+                } catch (error) {
+                    console.warn('Markdown parsing failed:', error);
+                    messageDiv.textContent = text;
                 }
             } else {
                 messageDiv.textContent = text;
@@ -901,7 +940,7 @@ class GeminiChatProvider {
     </script>
 </body>
 </html>`;
-    }
+  }
 }
 
 function deactivate() {}
